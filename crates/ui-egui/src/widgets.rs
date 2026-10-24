@@ -54,7 +54,7 @@ impl<'a> HotNumberOptions<'a> {
 /// Returns (response, Some(new value) when changed).
 pub fn hot_number(ui: &mut Ui, label: &str, id: egui::Id, value: f64, options: HotNumberOptions<'_>) -> (Response, Option<f64>) {
     let editing_id = id.with("editing");
-    let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
+    let editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
     if let Some(buf) = editing.as_mut() {
         return hot_number_editor(ui, label, id, value, options.range, options.suffix, buf);
     }
