@@ -1326,18 +1326,6 @@ fn strictly_increasing(values: &[u8]) -> bool {
     values.windows(2).all(|pair| pair[0] < pair[1])
 }
 
-#[cfg(test)]
-mod tests {
-    use super::strictly_increasing;
-
-    #[test]
-    fn film_grain_scaling_points_must_increase() {
-        assert!(strictly_increasing(&[]));
-        assert!(strictly_increasing(&[0, 127, 255]));
-        assert!(!strictly_increasing(&[12, 12]));
-        assert!(!strictly_increasing(&[12, 11]));
-    }
-}
 
 pub(crate) fn default_gm_params() -> [[i32; 6]; 8] {
     let mut p = [[0i32; 6]; 8];
@@ -1383,5 +1371,18 @@ fn decode_subexp(r: &mut BitReader, num_syms: i32) -> Result<i32> {
         } else {
             return Ok(r.f(b2 as u32)? as i32 + mk);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strictly_increasing;
+
+    #[test]
+    fn film_grain_scaling_points_must_increase() {
+        assert!(strictly_increasing(&[]));
+        assert!(strictly_increasing(&[0, 127, 255]));
+        assert!(!strictly_increasing(&[12, 12]));
+        assert!(!strictly_increasing(&[12, 11]));
     }
 }
