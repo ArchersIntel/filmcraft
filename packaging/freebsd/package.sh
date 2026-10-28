@@ -41,7 +41,8 @@ NATIVE_ARCH="$ARCH"
 if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
   case "$CARGO_BUILD_TARGET" in
     aarch64-unknown-freebsd) ARCH=aarch64 ;;
-    *) ARCH=x86_64 ;;
+    x86_64-unknown-freebsd) ARCH=x86_64 ;;
+    *) echo "error: unsupported CARGO_BUILD_TARGET $CARGO_BUILD_TARGET" >&2; exit 2 ;;
   esac
 fi
 if [[ "$DRY_RUN" = 0 ]] && [[ "$(uname -s)" != FreeBSD ]]; then
