@@ -41,8 +41,8 @@ pub(crate) fn effectcraft_overlay_text(fraction: f32, frames_flow: bool) -> Stri
 fn draw_effectcraft_progress(app: &FilmcraftApp, ui: &egui::Ui, pic: Rect, which: Which, time: Tick) {
     let shown = match which {
         Which::Program => app.session.active_sequence().and_then(|q| {
-            // the last video track is the topmost
-            q.video_tracks.iter().rev().filter_map(|tr| tr.item_at(time)).find_map(|it| app.session.effectcraft_clip_overlay(it.id, it.item))
+            // the last video track is the topmost: only its clip is on screen, so only its render shows
+            q.video_tracks.iter().rev().find_map(|tr| tr.item_at(time)).and_then(|it| app.session.effectcraft_clip_overlay(it.id, it.item))
         }),
         Which::Source => app.session.state.source_item.and_then(|item| app.session.effectcraft_clip_overlay(filmcraft_project::ClipId(u64::MAX), item)),
     };

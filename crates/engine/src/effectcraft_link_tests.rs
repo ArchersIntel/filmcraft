@@ -606,6 +606,81 @@ fn hostile_parameters_give_errors_not_panics() {
     assert!(s.ec_links.is_empty() && s.ec_imports.is_empty() && s.ec_jobs.is_empty() && s.ec_pending.is_empty());
 }
 
+/// CWE-427: an installed program must not run `C:\EffectCraft\target\release\...`, a folder any
+/// user can create. Only development builds look in the parent folders.
+#[test]
+fn the_parent_folder_search_is_for_development_builds_only() {
+    let exe_dir = Path::new("C:\\Program Files\\FilmCraft\\bin");
+    let release = tool_candidates(Some(exe_dir), "effectcraft-cli.exe", false);
+    assert_eq!(release, vec![exe_dir.join("effectcraft-cli.exe")], "only the copy beside the program");
+    let dev = tool_candidates(Some(exe_dir), "effectcraft-cli.exe", true);
+    assert_eq!(dev.first(), release.first(), "the copy beside the program comes first");
+    assert!(dev.len() > 1 && dev.iter().skip(1).all(|p| p.components().any(|c| c.as_os_str() == "EffectCraft")), "{dev:?}");
+    assert!(tool_candidates(None, "effectcraft-cli", true).is_empty());
+}
+
+/// Switching to another project while a background import renders must not bind the render to
+/// whatever item of the new project has the same id.
+#[test]
+fn a_render_finishing_after_a_project_switch_changes_nothing() {
+    let mut s = Session::default();
+    s.execute("file.newProject", json!({"name": "First"})).unwrap();
+    let (prog, _) = register_job(&mut s, "Lower Third", "Starting...");
+    let imported = s.execute("file.importDemoFootage", json!({"scene": "Aurora"})).unwrap();
+    let item = ItemId(imported["items"][0].as_u64().unwrap());
+    let done = Arc::new(Mutex::new(Some(Ok("elsewhere.mov".to_string()))));
+    s.ec_links.push(EcLink { project: "a.ecproj".into(), comp: "A".into(), render: "r.mov".into(), stamp: None, cli: None, app: None });
+    s.ec_pending.insert("r.mov".into());
+    s.ec_imports.push(EcImport { item, project: "a.ecproj".into(), comp: "A".into(), render: "r.mov".into(), progress: prog, done });
+    // another project, whose first item has the same id
+    s.execute("file.newProject", json!({"name": "Second"})).unwrap();
+    s.execute("file.importDemoFootage", json!({"scene": "Aurora"})).unwrap();
+    let before = s.project.item(item).and_then(|i| i.as_media()).map(|m| m.media.clone());
+    assert!(before.is_some(), "the new project has an item with the old item's id");
+    assert!(s.ec_links.is_empty() && s.ec_imports.is_empty() && s.ec_jobs.is_empty() && s.ec_pending.is_empty());
+    assert!(s.poll_effectcraft_jobs().is_empty());
+    assert_eq!(s.project.item(item).and_then(|i| i.as_media()).map(|m| m.media.clone()), before, "the unrelated item keeps its footage");
+}
+
+/// A synchronous import that fails leaves no item and no undo step behind.
+#[test]
+fn a_failed_synchronous_import_takes_its_item_back() {
+    let mut s = Session::default();
+    let mark = s.undo_mark();
+    s.execute("file.importDemoFootage", json!({"scene": "Aurora"})).unwrap();
+    assert!(s.project.items.values().any(|i| i.as_media().is_some()));
+    s.ec_links.push(EcLink { project: "a.ecproj".into(), comp: "A".into(), render: "r.mov".into(), stamp: None, cli: None, app: None });
+    abandon_import(&mut s, mark, "a.ecproj");
+    assert!(s.project.items.values().all(|i| i.as_media().is_none()), "the item is gone");
+    assert!(s.ec_links.is_empty());
+    assert_eq!(s.undo_mark(), mark, "and so is its undo step");
+}
+
+/// Undo after a re-render goes back to the old movie, so the old movie must still be there.
+#[test]
+fn undoing_a_re_render_finds_the_old_movie() {
+    use crate::media_test_util::{make_movie, session_with, tmp_dir};
+    use filmcraft_media::DemoScene;
+    let dir = tmp_dir("ec-link-undo");
+    let (old, new) = (dir.join("old.mov"), dir.join("new.mov"));
+    make_movie(&old, DemoScene::Aurora, 64, 36, 4);
+    make_movie(&new, DemoScene::Plasma, 64, 36, 4);
+    let (mut s, items, _) = session_with(&[&old]);
+    let item = items[0];
+    let (old_s, new_s) = (old.to_string_lossy().into_owned(), new.to_string_lossy().into_owned());
+    s.ec_links.push(EcLink { project: "a.ecproj".into(), comp: "A".into(), render: old_s.clone(), stamp: None, cli: None, app: None });
+    let path_of = |s: &Session| match s.project.item(item).and_then(|i| i.as_media()).map(|m| m.media.clone()) {
+        Some(MediaRef::File { path }) => path,
+        other => panic!("not a file: {other:?}"),
+    };
+    s.switch_linked_render("a.ecproj", None, &new_s).unwrap();
+    assert_eq!(path_of(&s), new_s);
+    assert!(old.exists(), "the superseded movie is kept");
+    s.undo();
+    assert_eq!(path_of(&s), old_s);
+    assert!(Path::new(&path_of(&s)).exists(), "so the clips are not offline after Undo");
+}
+
 #[test]
 fn a_missing_cli_is_reported_not_fatal() {
     let r = run_cli("definitely-not-effectcraft-cli", &[]);

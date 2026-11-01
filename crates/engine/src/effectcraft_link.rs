@@ -55,9 +55,21 @@ fn safe_stem(name: &str) -> String {
     if s.is_empty() { "Clip".into() } else { s.chars().take(80).collect() }
 }
 
+/// Where to look for the tool `file` when the caller named none: beside the running program and,
+/// in development builds only, in an `EffectCraft/target/release` folder next to one of its parent
+/// folders (a side-by-side checkout). An installed program's parents include folders any user can
+/// create (`C:\EffectCraft\...`), where a planted program would be run (CWE-427).
+fn tool_candidates(exe_dir: Option<&Path>, file: &str, dev_build: bool) -> Vec<PathBuf> {
+    let Some(dir) = exe_dir else { return Vec::new() };
+    let mut found = vec![dir.join(file)];
+    if dev_build {
+        found.extend(dir.ancestors().skip(1).take(4).map(|a| a.join("EffectCraft").join("target").join("release").join(file)));
+    }
+    found
+}
+
 /// The tool to run: the parameter, then the environment variable, then a copy beside the running
-/// program or in an `EffectCraft/target/release` folder next to one of its parent folders (a
-/// side-by-side checkout), then the bare name for the `PATH`.
+/// program or (development builds) in a side-by-side checkout, then the bare name for the `PATH`.
 fn find_tool(param: Option<&str>, env: &str, default: &str) -> String {
     if let Some(p) = param {
         return p.to_string();
@@ -67,11 +79,10 @@ fn find_tool(param: Option<&str>, env: &str, default: &str) -> String {
     }
     let file = format!("{default}{}", std::env::consts::EXE_SUFFIX);
     let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
-    let beside = exe_dir.iter().map(|d| d.join(&file));
-    let checkouts = exe_dir
-        .iter()
-        .flat_map(|d| d.ancestors().skip(1).take(4).map(|a| a.join("EffectCraft").join("target").join("release").join(&file)).collect::<Vec<_>>());
-    beside.chain(checkouts).find(|p| p.is_file()).map_or_else(|| default.to_string(), |p| p.to_string_lossy().into_owned())
+    tool_candidates(exe_dir.as_deref(), &file, cfg!(debug_assertions))
+        .into_iter()
+        .find(|p| p.is_file())
+        .map_or_else(|| default.to_string(), |p| p.to_string_lossy().into_owned())
 }
 
 /// Run `effectcraft-cli` with `args`; its stderr (or stdout) is the error when it fails.
@@ -720,6 +731,18 @@ impl Session {
         Some(format!("{}: {status}{more}; the clip updates when it is done", first.label.trim_end()))
     }
 
+    /// A different project became the session's: the links, replacements and imports in flight name
+    /// the old project's items and clips, and ids restart at small numbers in a new project, so a
+    /// finished render must not be bound to whatever now has that id, and the old links must not
+    /// keep rendering into the new project. The worker threads finish; their results are dropped.
+    pub(crate) fn drop_effectcraft_document_state(&mut self) {
+        self.ec_links.clear();
+        self.ec_jobs.clear();
+        self.ec_imports.clear();
+        self.ec_pending.clear();
+        self.ec_progress.clear();
+    }
+
     /// What to paint over `clip` (whose footage is `item`) in the timeline while EffectCraft renders
     /// it: how far along it is (0 to 1) and whether frames are coming yet (else it is still
     /// preparing). `None` when nothing renders for the clip.
@@ -786,7 +809,7 @@ impl Session {
     }
 
     /// Point every clip that uses a link's movie at `new`, the movie just rendered, and remember
-    /// the project's `stamp`. The old movie is deleted when nothing uses it any more.
+    /// the project's `stamp`. The old movie is kept so that Undo still finds it.
     fn switch_linked_render(&mut self, project: &str, stamp: Option<Stamp>, new: &str) -> std::result::Result<(), String> {
         let Some(old) = self.ec_links.iter().find(|l| l.project == project).map(|l| l.render.clone()) else { return Ok(()) };
         if old != new {
@@ -805,10 +828,8 @@ impl Session {
             l.render = new.to_string();
             l.stamp = stamp;
         }
-        if old != new {
-            // Best effort: a movie still open somewhere stays until it can be removed.
-            let _ = std::fs::remove_file(&old);
-        }
+        // The old movie stays on disk: the footage switch is an undo step, and Undo points the
+        // clips back at it (deleting it would turn them into offline media).
         Ok(())
     }
 
@@ -945,6 +966,7 @@ pub(crate) fn import_project(s: &mut Session, project: &str, bin: Option<filmcra
     let label = s.prefs.labels.defaults.dynamic_link;
     let info = placeholder_info(&stem, &comp);
     let path = render.clone();
+    let mark = s.undo_mark();
     let item = s.edit("Import EffectCraft Project", |p, _| {
         Ok(p.add_item(
             &stem,
@@ -983,17 +1005,21 @@ pub(crate) fn import_project(s: &mut Session, project: &str, bin: Option<filmcra
         work();
         let written = job.done.lock().unwrap_or_else(PoisonError::into_inner).take().unwrap_or_else(|| Err("the render did not finish".into()));
         s.ec_pending.remove(&job.render);
-        match written {
-            Ok(w) => {
-                bind_import(s, &job, &w)?;
-            }
-            Err(e) => {
-                s.ec_links.retain(|l| l.project != job.project);
-                return Err(EngineError::Other(e));
-            }
+        let bound = written.map_err(EngineError::Other).and_then(|w| bind_import(s, &job, &w));
+        if let Err(e) = bound {
+            abandon_import(s, mark, &job.project);
+            return Err(e);
         }
     }
     Ok(item)
+}
+
+/// A synchronous import failed after its item was added: take the item (and its undo step) back,
+/// so the command's error is the whole story and no item points at a movie that does not exist.
+fn abandon_import(s: &mut Session, mark: crate::UndoMark, project: &str) {
+    s.ec_links.retain(|l| l.project != project);
+    s.revert_to(mark);
+    crate::relink::refresh(s);
 }
 
 /// The render is done: the item takes the movie's real properties (audio too) and plays it.

@@ -9,7 +9,6 @@ impl FilmcraftApp {
     /// ([`filmcraft_engine::media_watch`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn tick_media_refresh(&mut self, ctx: &egui::Context, now: f64) {
-        crate::menus::show_effectcraft_prompt(self, ctx);
         // EffectCraft compositions saved in EffectCraft are rendered again; the clips then switch to
         // the new movies.
         match self.session.poll_effectcraft_sync() {
@@ -102,6 +101,8 @@ impl FilmcraftApp {
         // the Timeline has had its chance to place a file drop this frame; anything left stays a bin import
         self.pending_timeline_drop = None;
         panels::dialogs::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::menus::show_effectcraft_prompt(self, &ctx);
         panels::file_dialogs::show_overwrite(self, &ctx);
         updates_ui::show(self, &ctx);
         if !self.ui.show_status_bar {
