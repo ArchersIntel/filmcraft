@@ -741,6 +741,9 @@ impl Session {
         self.ec_imports.clear();
         self.ec_pending.clear();
         self.ec_progress.clear();
+        // A pass in flight matches its results by project path: a new document that links the same
+        // `.ecproj` would take the old document's render.
+        self.ec_sync = None;
     }
 
     /// What to paint over `clip` (whose footage is `item`) in the timeline while EffectCraft renders

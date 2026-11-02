@@ -642,6 +642,21 @@ fn a_render_finishing_after_a_project_switch_changes_nothing() {
     assert_eq!(s.project.item(item).and_then(|i| i.as_media()).map(|m| m.media.clone()), before, "the unrelated item keeps its footage");
 }
 
+/// A re-render pass started for the old project must not be applied to the next one, which may link
+/// the same `.ecproj` file.
+#[test]
+fn a_sync_pass_in_flight_is_dropped_when_the_project_changes() {
+    let mut s = Session::default();
+    s.ec_links.push(EcLink { project: "a.ecproj".into(), comp: "A".into(), render: "r.mov".into(), stamp: None, cli: None, app: None });
+    s.ec_sync = Some(Arc::new(Mutex::new(Some(vec![("a.ecproj".into(), Some((1, 2)), Ok("new.mov".into()))]))));
+    s.execute("file.newProject", json!({"name": "Second"})).unwrap();
+    // the next document links the same project file
+    s.ec_links.push(EcLink { project: "a.ecproj".into(), comp: "A".into(), render: "r2.mov".into(), stamp: None, cli: None, app: None });
+    assert!(s.ec_sync.is_none());
+    assert_eq!(s.poll_effectcraft_sync(), None, "the old pass has no result to apply");
+    assert_eq!(s.ec_links.first().map(|l| l.render.as_str()), Some("r2.mov"));
+}
+
 /// A synchronous import that fails leaves no item and no undo step behind.
 #[test]
 fn a_failed_synchronous_import_takes_its_item_back() {
